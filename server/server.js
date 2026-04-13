@@ -10,6 +10,7 @@ import bookingRouter from './routes/bookingRoutes.js';
 import adminRouter from './routes/adminRoutes.js';
 import userRouter from './routes/userRoutes.js';
 import { stripeWebhooks } from './controllers/stripeWebhooks.js';
+import paymentRoutes from './routes/paymentRoutes.js';
 
 const app = express();
 const port = 3000;
@@ -21,9 +22,13 @@ app.use('/api/stripe', express.raw({type: 'application/json'}), stripeWebhooks)
 
 // Middleware
 app.use(express.json())
+app.use(express.urlencoded({ extended: true }))
 app.use(cors())
-app.use(clerkMiddleware())
 
+// Payment callbacks must be public because SSLCOMMERZ does not send Clerk auth cookies.
+app.use('/api/payment', paymentRoutes)
+
+app.use(clerkMiddleware())
 
 // API Routes
 app.get('/', (req, res)=> res.send('Server is Live!'))

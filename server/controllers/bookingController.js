@@ -1,7 +1,7 @@
+import axios from "axios";
 import { inngest } from "../inngest/index.js";
 import Booking from "../models/Booking.js";
 import Show from "../models/Show.js"
-import stripe from 'stripe'
 
 
 // Function to check availability of selected seats for a movie
@@ -25,7 +25,6 @@ export const createBooking = async (req, res)=>{
     try {
         const {userId} = req.auth();
         const {showId, selectedSeats} = req.body;
-        const { origin } = req.headers;
 
         // Check if the seat is available for the selected show
         const isAvailable = await checkSeatsAvailability(showId, selectedSeats)
@@ -53,44 +52,61 @@ export const createBooking = async (req, res)=>{
 
         await showData.save();
 
-         // Stripe Gateway Initialize
-         const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY)
+        const baseUrl = process.env.BASE_URL || 'http://localhost:3000';
+        const paymentData = {
+            store_id: process.env.SSLCOMMERZ_STORE_ID,
+            store_passwd: process.env.SSLCOMMERZ_STORE_PASSWORD,
+            total_amount: booking.amount,
+            currency: "BDT",
+            tran_id: booking._id.toString(),
+            success_url: `${baseUrl}/api/payment/success`,
+            fail_url: `${baseUrl}/api/payment/fail`,
+            cancel_url: `${baseUrl}/api/payment/cancel`,
+            cus_name: "Customer",
+            cus_email: "test@gmail.com",
+            cus_add1: "Dhaka",
+            cus_phone: "01700000000",
+            shipping_method: "NO",
+            product_name: showData.movie.title,
+            product_category: "Entertainment",
+            product_profile: "general",
+            value_a: booking._id.toString()
+        };
 
-         // Creating line items to for Stripe
-         const line_items = [{
-            price_data: {
-                currency: 'usd',
-                product_data:{
-                    name: showData.movie.title
-                },
-                unit_amount: Math.floor(booking.amount) * 100
-            },
-            quantity: 1
-         }]
+        const response = await axios.post(
+            `${process.env.SSLC_BASE_URL}/gwprocess/v4/api.php`,
+            new URLSearchParams(paymentData).toString(),
+            {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
+            }
+        );
 
-         const session = await stripeInstance.checkout.sessions.create({
-            success_url: `${origin}/loading/my-bookings`,
-            cancel_url: `${origin}/my-bookings`,
-            line_items: line_items,
-            mode: 'payment',
-            metadata: {
-                bookingId: booking._id.toString()
-            },
-            expires_at: Math.floor(Date.now() / 1000) + 30 * 60, // Expires in 30 minutes
-         })
+        const paymentUrl = response.data?.GatewayPageURL;
+        if (!paymentUrl) {
+            console.error("SSLCOMMERZ init error", {
+                status: response.status,
+                data: response.data
+            });
+            return res.json({
+                success: false,
+                message: "Unable to initialize SSLCOMMERZ payment.",
+                details: response.data
+            });
+        }
 
-         booking.paymentLink = session.url
-         await booking.save()
+        booking.paymentLink = paymentUrl;
+        await booking.save();
 
-         // Run Inngest Sheduler Function to check payment status after 10 minutes
-         await inngest.send({
+        await inngest.send({
             name: "app/checkpayment",
             data: {
                 bookingId: booking._id.toString()
             }
-         })
+        });
 
-         res.json({success: true, url: session.url})
+        res.json({success: true, url: paymentUrl});
 
     } catch (error) {
         console.log(error.message);
